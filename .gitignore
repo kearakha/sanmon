@@ -1,0 +1,33 @@
+# Binary
+/sanmon
+/bin/
+*.exe
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Rahasia — jangan pernah ke-commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Editor & OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Lokal
+/tmp/
+*.log
+docker-compose.override.yml
