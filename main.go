@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -11,15 +12,20 @@ import (
 	"time"
 )
 
-const addr = ":8777"
-
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
+	cfg, err := loadConfig("config.yaml")
+	if err != nil {
+		slog.Error("load config", "err", err)
+		os.Exit(1)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 
+	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           mux,

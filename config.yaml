@@ -1,0 +1,11 @@
+port: 8777
+
+models: {}
+# Peta alias -> provider, nama model asli, dan harga per 1 juta token.
+# Contoh (diisi mulai M1):
+# models:
+#   gemini-flash:
+#     provider: gemini
+#     model: gemini-2.5-flash
+#     price_in_per_million: 150000
+#     price_out_per_million: 600000
