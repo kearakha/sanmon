@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sanmon
+      POSTGRES_PASSWORD: sanmon
+      POSTGRES_DB: sanmon
+    ports:
+      - "5435:5432"
+    volumes:
+      - sanmon-postgres:/var/lib/postgresql/data
+
+volumes:
+  sanmon-postgres:
