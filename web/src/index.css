@@ -1,0 +1,24 @@
+@import 'tailwindcss';
+
+:root {
+  --bg: #0a0a0a;
+  --panel: #121212;
+  --border: #262626;
+  --text: #e5e5e0;
+  --text-dim: #7a7a75;
+  --accent: #e8541e;
+
+  color-scheme: dark;
+  color: var(--text);
+  background: var(--bg);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.font-mono-nums {
+  font-family: ui-monospace, 'SF Mono', Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
