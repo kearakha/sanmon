@@ -22,8 +22,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	httpClient := &http.Client{}
+
+	v1 := http.NewServeMux()
+	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey))
+	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey))
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
+	mux.Handle("/v1/", requireVirtualKey(cfg.VirtualKey, v1))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
