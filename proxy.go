@@ -9,7 +9,8 @@ import (
 	"net/http"
 )
 
-const geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
+// var, bukan const — dites di proxy_test.go dengan diarahin ke httptest.Server palsu.
+var geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 func newChatCompletionsHandler(client *http.Client, apiKey string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
