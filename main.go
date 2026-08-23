@@ -27,6 +27,7 @@ func main() {
 	v1 := http.NewServeMux()
 	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey))
 	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey))
+	v1.HandleFunc("GET /v1/models", newModelsHandler(httpClient, cfg.GeminiAPIKey))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
