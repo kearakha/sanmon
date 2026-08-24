@@ -19,6 +19,7 @@ type Config struct {
 	Models       map[string]ModelConfig `yaml:"models"`
 	VirtualKey   string                 `yaml:"-"`
 	GeminiAPIKey string                 `yaml:"-"`
+	AdminToken   string                 `yaml:"-"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -48,6 +49,11 @@ func loadConfig(path string) (Config, error) {
 	cfg.GeminiAPIKey = os.Getenv("GEMINI_API_KEY")
 	if cfg.GeminiAPIKey == "" {
 		return Config{}, fmt.Errorf("GEMINI_API_KEY wajib diisi")
+	}
+
+	cfg.AdminToken = os.Getenv("SANMON_ADMIN_TOKEN")
+	if cfg.AdminToken == "" {
+		return Config{}, fmt.Errorf("SANMON_ADMIN_TOKEN wajib diisi")
 	}
 
 	return cfg, nil
