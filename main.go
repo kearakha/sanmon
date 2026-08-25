@@ -31,7 +31,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("/v1/", requireVirtualKey(cfg.VirtualKey, v1))
+	mux.Handle("/v1/", requireBearerToken(cfg.VirtualKey, v1))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
