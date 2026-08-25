@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-func TestRequireVirtualKey(t *testing.T) {
+func TestRequireBearerToken(t *testing.T) {
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := requireVirtualKey("sk-sanmon-test", ok)
+	handler := requireBearerToken("sk-sanmon-test", ok)
 
 	cases := []struct {
 		name   string
