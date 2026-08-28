@@ -24,14 +24,18 @@ func main() {
 
 	httpClient := &http.Client{}
 
+	hub := NewHub()
+	go hub.Run()
+
 	v1 := http.NewServeMux()
-	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey))
-	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey))
+	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, hub))
+	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, hub))
 	v1.HandleFunc("GET /v1/models", newModelsHandler(httpClient, cfg.GeminiAPIKey))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
 	mux.Handle("/v1/", requireBearerToken(cfg.VirtualKey, v1))
+	mux.HandleFunc("GET /admin/stream", requireAdminQueryToken(cfg.AdminToken, newStreamHandler(hub)))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
