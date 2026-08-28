@@ -35,7 +35,7 @@ func TestChatCompletionsHandler_StreamingPassthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key").ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", NewHub()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -58,7 +58,7 @@ func TestChatCompletionsHandler_InjectsIncludeUsage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key").ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", NewHub()).ServeHTTP(rec, req)
 
 	var payload map[string]any
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
@@ -83,7 +83,7 @@ func TestChatCompletionsHandler_DoesNotOverrideExistingIncludeUsage(t *testing.T
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key").ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", NewHub()).ServeHTTP(rec, req)
 
 	var payload map[string]any
 	json.Unmarshal(receivedBody, &payload)

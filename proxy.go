@@ -7,13 +7,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // var, bukan const — dites di proxy_test.go dengan diarahin ke httptest.Server palsu.
 var geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
-func newChatCompletionsHandler(client *http.Client, apiKey string) http.HandlerFunc {
+func newChatCompletionsHandler(client *http.Client, apiKey string, hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "gagal baca request body")
@@ -26,6 +29,7 @@ func newChatCompletionsHandler(client *http.Client, apiKey string) http.HandlerF
 			return
 		}
 
+		model, _ := payload["model"].(string)
 		streaming, _ := payload["stream"].(bool)
 		if streaming {
 			streamOptions, ok := payload["stream_options"].(map[string]any)
@@ -55,9 +59,11 @@ func newChatCompletionsHandler(client *http.Client, apiKey string) http.HandlerF
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("chat completions dibatalin", "reason", r.Context().Err())
+				hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
+			hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -67,16 +73,30 @@ func newChatCompletionsHandler(client *http.Client, apiKey string) http.HandlerF
 
 		if !streaming {
 			io.Copy(w, resp.Body)
+			hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: false, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()})
 			return
 		}
 
-		streamBody(w, r, resp.Body)
+		partial, streamErr := streamBody(w, r, resp.Body)
+		hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: true, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(), Partial: partial, Error: streamErr})
 	}
 }
 
-func newEmbeddingsHandler(client *http.Client, apiKey string) http.HandlerFunc {
+func newEmbeddingsHandler(client *http.Client, apiKey string, hub *Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, geminiBaseURL+"/embeddings", r.Body)
+		start := time.Now()
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "gagal baca request body")
+			return
+		}
+
+		var payload map[string]any
+		json.Unmarshal(body, &payload) // best-effort, model cuma buat live feed
+		model, _ := payload["model"].(string)
+
+		upstreamReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, geminiBaseURL+"/embeddings", bytes.NewReader(body))
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "gagal susun request upstream")
 			return
@@ -88,9 +108,11 @@ func newEmbeddingsHandler(client *http.Client, apiKey string) http.HandlerFunc {
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("embeddings dibatalin", "reason", r.Context().Err())
+				hub.Broadcast(Event{Time: time.Now(), Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
+			hub.Broadcast(Event{Time: time.Now(), Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -98,6 +120,7 @@ func newEmbeddingsHandler(client *http.Client, apiKey string) http.HandlerFunc {
 		copyHeader(w, resp)
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
+		hub.Broadcast(Event{Time: time.Now(), Model: model, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()})
 	}
 }
 
@@ -110,12 +133,14 @@ func copyHeader(w http.ResponseWriter, resp *http.Response) {
 }
 
 // streamBody nyalurin SSE chunk demi chunk (nggak numpuk di memori) dan
-// motong upstream begitu klien putus lewat context propagation.
-func streamBody(w http.ResponseWriter, r *http.Request, upstream io.Reader) {
+// motong upstream begitu klien putus lewat context propagation. Balikin
+// partial=true kalau stream nggak nyampe EOF wajar (klien putus / error
+// upstream di tengah), buat ngisi Event.Partial di live feed.
+func streamBody(w http.ResponseWriter, r *http.Request, upstream io.Reader) (partial bool, errMsg string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		io.Copy(w, upstream)
-		return
+		return false, ""
 	}
 
 	buf := make([]byte, 4096)
@@ -123,22 +148,22 @@ func streamBody(w http.ResponseWriter, r *http.Request, upstream io.Reader) {
 		n, err := upstream.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return
+				return true, ""
 			}
 			flusher.Flush()
 		}
 		if err != nil {
 			if err == io.EOF {
-				return
+				return false, ""
 			}
 			if r.Context().Err() != nil {
 				slog.Info("stream dipotong: klien putus", "reason", r.Context().Err())
-				return
+				return true, ""
 			}
 			slog.Warn("stream keputus di tengah jalan", "err", err)
 			fmt.Fprint(w, "event: error\ndata: {\"error\":\"upstream stream interrupted\"}\n\n")
 			flusher.Flush()
-			return
+			return true, "upstream stream interrupted"
 		}
 	}
 }
