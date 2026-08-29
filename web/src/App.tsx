@@ -1,78 +1,58 @@
-type FakeRequest = {
+import { useEffect, useRef, useState } from "react";
+
+// Cocok sama Event di hub.go. Token & biaya belum ada — nyusul M3, jangan
+// diisi 0 palsu (aturan keras #3).
+type LiveEvent = {
   id: number;
   time: string;
   model: string;
-  tokensIn: number;
-  tokensOut: number;
-  costMicroUsd: number;
-  latencyMs: number;
-  status: "ok" | "error" | "partial";
+  stream: boolean;
+  status_code: number;
+  latency_ms: number;
+  partial?: boolean;
+  error?: string;
 };
 
-const FAKE_REQUESTS: FakeRequest[] = [
-  {
-    id: 1042,
-    time: "07:41:12",
-    model: "gemini-flash",
-    tokensIn: 812,
-    tokensOut: 204,
-    costMicroUsd: 143200,
-    latencyMs: 891,
-    status: "ok",
-  },
-  {
-    id: 1041,
-    time: "07:40:58",
-    model: "gemini-flash",
-    tokensIn: 340,
-    tokensOut: 88,
-    costMicroUsd: 61900,
-    latencyMs: 412,
-    status: "ok",
-  },
-  {
-    id: 1040,
-    time: "07:40:31",
-    model: "gemini-pro",
-    tokensIn: 2103,
-    tokensOut: 512,
-    costMicroUsd: 981000,
-    latencyMs: 2310,
-    status: "partial",
-  },
-  {
-    id: 1039,
-    time: "07:39:47",
-    model: "gemini-flash",
-    tokensIn: 90,
-    tokensOut: 0,
-    costMicroUsd: 0,
-    latencyMs: 120,
-    status: "error",
-  },
-  {
-    id: 1038,
-    time: "07:39:02",
-    model: "gemini-flash",
-    tokensIn: 1204,
-    tokensOut: 340,
-    costMicroUsd: 211400,
-    latencyMs: 1042,
-    status: "ok",
-  },
-];
+const GATEWAY_URL = "http://localhost:8777";
+const ADMIN_TOKEN = import.meta.env.VITE_SANMON_ADMIN_TOKEN as
+  string | undefined;
+const MAX_ROWS = 50;
 
-function formatCost(microUsd: number): string {
-  return `$${(microUsd / 1_000_000).toFixed(4)}`;
+function statusLabel(ev: LiveEvent): "OK" | "ERR" | "PARTIAL" {
+  if (ev.partial) return "PARTIAL";
+  if (ev.error || ev.status_code >= 400) return "ERR";
+  return "OK";
 }
 
-function statusLabel(status: FakeRequest["status"]): string {
-  if (status === "ok") return "OK";
-  if (status === "error") return "ERR";
-  return "PARTIAL";
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleTimeString("id-ID", { hour12: false });
 }
 
 function App() {
+  const [events, setEvents] = useState<LiveEvent[]>([]);
+  const [connected, setConnected] = useState(false);
+  const nextId = useRef(0);
+
+  useEffect(() => {
+    if (!ADMIN_TOKEN) return;
+
+    const source = new EventSource(
+      `${GATEWAY_URL}/admin/stream?token=${encodeURIComponent(ADMIN_TOKEN)}`,
+    );
+    source.onopen = () => setConnected(true);
+    source.onerror = () => setConnected(false);
+    source.onmessage = (msg) => {
+      const ev = JSON.parse(msg.data) as Omit<LiveEvent, "id">;
+      setEvents((prev) => [
+        { ...ev, id: nextId.current++ },
+        ...prev.slice(0, MAX_ROWS - 1),
+      ]);
+    };
+
+    return () => source.close();
+  }, []);
+
   return (
     <div className="min-h-svh flex flex-col">
       <header className="border-b border-[var(--border)] px-6 py-4 flex items-baseline justify-between">
@@ -80,7 +60,11 @@ function App() {
           Sanmon <span className="text-[var(--accent)]">/</span> live feed
         </h1>
         <span className="font-mono-nums text-xs text-[var(--text-dim)]">
-          data palsu — M0
+          {!ADMIN_TOKEN
+            ? "VITE_SANMON_ADMIN_TOKEN belum diset"
+            : connected
+              ? "live"
+              : "menyambung..."}
         </span>
       </header>
 
@@ -90,32 +74,28 @@ function App() {
             <tr className="text-left text-[var(--text-dim)] border-b border-[var(--border)]">
               <th className="py-2 font-normal">waktu</th>
               <th className="py-2 font-normal">model</th>
-              <th className="py-2 font-normal text-right">token in</th>
-              <th className="py-2 font-normal text-right">token out</th>
-              <th className="py-2 font-normal text-right">biaya</th>
+              <th className="py-2 font-normal text-right">stream</th>
               <th className="py-2 font-normal text-right">latency</th>
               <th className="py-2 font-normal text-right">status</th>
             </tr>
           </thead>
           <tbody className="font-mono-nums">
-            {FAKE_REQUESTS.map((req) => (
-              <tr key={req.id} className="border-b border-[var(--border)]">
-                <td className="py-2 text-[var(--text-dim)]">{req.time}</td>
-                <td className="py-2">{req.model}</td>
-                <td className="py-2 text-right">{req.tokensIn}</td>
-                <td className="py-2 text-right">{req.tokensOut}</td>
-                <td className="py-2 text-right">
-                  {formatCost(req.costMicroUsd)}
+            {events.map((ev) => (
+              <tr key={ev.id} className="border-b border-[var(--border)]">
+                <td className="py-2 text-[var(--text-dim)]">
+                  {formatTime(ev.time)}
                 </td>
-                <td className="py-2 text-right">{req.latencyMs}ms</td>
+                <td className="py-2">{ev.model}</td>
+                <td className="py-2 text-right">{ev.stream ? "ya" : "-"}</td>
+                <td className="py-2 text-right">{ev.latency_ms}ms</td>
                 <td
                   className={`py-2 text-right ${
-                    req.status === "ok"
+                    statusLabel(ev) === "OK"
                       ? "text-[var(--text-dim)]"
                       : "text-[var(--accent)]"
                   }`}
                 >
-                  {statusLabel(req.status)}
+                  {statusLabel(ev)}
                 </td>
               </tr>
             ))}
