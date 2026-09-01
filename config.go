@@ -20,6 +20,7 @@ type Config struct {
 	VirtualKey   string                 `yaml:"-"`
 	GeminiAPIKey string                 `yaml:"-"`
 	AdminToken   string                 `yaml:"-"`
+	DatabaseURL  string                 `yaml:"-"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -54,6 +55,11 @@ func loadConfig(path string) (Config, error) {
 	cfg.AdminToken = os.Getenv("SANMON_ADMIN_TOKEN")
 	if cfg.AdminToken == "" {
 		return Config{}, fmt.Errorf("SANMON_ADMIN_TOKEN wajib diisi")
+	}
+
+	cfg.DatabaseURL = os.Getenv("SANMON_DATABASE_URL")
+	if cfg.DatabaseURL == "" {
+		return Config{}, fmt.Errorf("SANMON_DATABASE_URL wajib diisi")
 	}
 
 	return cfg, nil
