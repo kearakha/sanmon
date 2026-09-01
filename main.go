@@ -24,6 +24,13 @@ func main() {
 
 	httpClient := &http.Client{}
 
+	db, err := openDB(cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("open db", "err", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
 	hub := NewHub()
 	go hub.Run()
 
