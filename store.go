@@ -63,12 +63,12 @@ func (s *Store) insert(ev Event) {
 
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO requests (
-			created_at, model_requested, provider, model_resolved, stream,
+			created_at, key_id, model_requested, provider, model_resolved, stream,
 			status_code, error, latency_ms, tokens_in, tokens_out,
 			cost_micro_usd, cost_unknown, partial
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`,
-		ev.Time, ev.Model, ev.Provider, nullIfEmpty(ev.ModelResolved), ev.Stream,
+		ev.Time, nullIfZero(ev.KeyID), ev.Model, ev.Provider, nullIfEmpty(ev.ModelResolved), ev.Stream,
 		ev.StatusCode, nullIfEmpty(ev.Error), ev.LatencyMs, ev.TokensIn, ev.TokensOut,
 		ev.CostMicroUSD, ev.CostUnknown, ev.Partial,
 	)
@@ -82,6 +82,15 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// nullIfZero: key_id itu FK nullable — 0 (nggak ada key, mestinya nggak
+// kejadian setelah auth) ditulis NULL biar nggak nabrak constraint.
+func nullIfZero(n int64) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }
 
 // RunRetention harus dipanggil di goroutine terpisah. Tiap kali ticker

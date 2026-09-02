@@ -1,7 +1,9 @@
 package main
 
 import (
-	"crypto/subtle"
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,15 +15,46 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	fmt.Fprintf(w, `{"error":%q}`, msg)
 }
 
-// requireBearerToken dipakai buat /v1/* (virtual key) dan /admin/* yang
-// baca token dari header (bukan query param — itu jalur SSE di admin.go).
-func requireBearerToken(expected string, next http.Handler) http.Handler {
+// authedKey itu data key yang lolos auth, dititipin lewat context ke handler
+// proxy — dipakai buat ngisi requests.key_id (dan nanti rate limit + budget).
+type authedKey struct {
+	ID int64
+}
+
+type ctxKey int
+
+const keyCtxKey ctxKey = 0
+
+func keyFromContext(ctx context.Context) authedKey {
+	k, _ := ctx.Value(keyCtxKey).(authedKey)
+	return k
+}
+
+// requireVirtualKey auth buat /v1/* : ambil Bearer token, hash SHA-256, cocokin
+// ke kolom token_hash (UNIQUE, jadi sekali query ber-index) yang belum
+// disabled. Nggak ketemu → 401. Ketemu → key-nya dititipin ke context.
+func requireVirtualKey(db *sql.DB, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+		if !ok || token == "" {
 			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		var k authedKey
+		err := db.QueryRowContext(r.Context(),
+			`SELECT id FROM keys WHERE token_hash = $1 AND NOT disabled`,
+			hashToken(token)).Scan(&k.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "gagal verifikasi key")
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), keyCtxKey, k)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

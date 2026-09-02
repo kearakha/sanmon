@@ -65,6 +65,7 @@ func parseSSEUsage(event []byte) (tokensIn, tokensOut int) {
 func newChatCompletionsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		keyID := keyFromContext(r.Context()).ID
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -108,11 +109,11 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("chat completions dibatalin", "reason", r.Context().Err())
-				emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, Event{Time: time.Now(), KeyID: keyID, Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, Event{Time: time.Now(), KeyID: keyID, Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -126,7 +127,7 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 			tokensIn, tokensOut := parseUsage(respBody)
 			provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
 			emitEvent(hub, store, Event{
-				Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+				Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 				Stream: false, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 				TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
 			})
@@ -136,7 +137,7 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 		partial, streamErr, tokensIn, tokensOut := streamBody(w, r, resp.Body)
 		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
 		emitEvent(hub, store, Event{
-			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+			Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 			Stream: true, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 			TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
 			Partial: partial, Error: streamErr,
@@ -147,6 +148,7 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		keyID := keyFromContext(r.Context()).ID
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -170,11 +172,11 @@ func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("embeddings dibatalin", "reason", r.Context().Err())
-				emitEvent(hub, store, Event{Time: time.Now(), Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, Event{Time: time.Now(), KeyID: keyID, Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			emitEvent(hub, store, Event{Time: time.Now(), Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, Event{Time: time.Now(), KeyID: keyID, Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -187,7 +189,7 @@ func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]
 		tokensIn, _ := parseUsage(respBody) // embeddings: cuma input token, nggak ada output
 		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, 0)
 		emitEvent(hub, store, Event{
-			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+			Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 			StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 			TokensIn: tokensIn, CostMicroUSD: cost, CostUnknown: unknown,
 		})
