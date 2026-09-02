@@ -55,6 +55,9 @@ func main() {
 	mux.HandleFunc("GET /admin/stream", requireAdminQueryToken(cfg.AdminToken, newStreamHandler(hub)))
 	mux.HandleFunc("GET /admin/requests", requireAdminQueryToken(cfg.AdminToken, newRequestsListHandler(db)))
 	mux.HandleFunc("GET /admin/requests/{id}", requireAdminQueryToken(cfg.AdminToken, newRequestHandler(db)))
+	mux.HandleFunc("GET /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeysListHandler(db)))
+	mux.HandleFunc("POST /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeyCreateHandler(db)))
+	mux.HandleFunc("DELETE /admin/keys/{id}", requireAdminQueryToken(cfg.AdminToken, newKeyDeleteHandler(db)))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
