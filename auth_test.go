@@ -32,7 +32,7 @@ func TestRequireVirtualKey(t *testing.T) {
 		gotKeyID = keyFromContext(r.Context()).ID
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := requireVirtualKey(db, newKeyLimiters(), next)
+	handler := requireVirtualKey(db, newKeyLimiters(), newBudgetTracker(db), next)
 
 	cases := []struct {
 		name   string

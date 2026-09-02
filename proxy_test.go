@@ -26,6 +26,12 @@ func testStore() *Store {
 	return &Store{queue: make(chan Event, 16)}
 }
 
+// testBudget balikin budgetTracker tanpa DB — cuma add() yang kepakai di
+// jalur handler, dan itu nggak nyentuh DB.
+func testBudget() *budgetTracker {
+	return newBudgetTracker(nil)
+}
+
 func TestChatCompletionsHandler_StreamingPassthrough(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher := w.(http.Flusher)
@@ -42,7 +48,7 @@ func TestChatCompletionsHandler_StreamingPassthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore()).ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore(), testBudget()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
@@ -65,7 +71,7 @@ func TestChatCompletionsHandler_InjectsIncludeUsage(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true}`))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore()).ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore(), testBudget()).ServeHTTP(rec, req)
 
 	var payload map[string]any
 	if err := json.Unmarshal(receivedBody, &payload); err != nil {
@@ -90,7 +96,7 @@ func TestChatCompletionsHandler_DoesNotOverrideExistingIncludeUsage(t *testing.T
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
-	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore()).ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore(), testBudget()).ServeHTTP(rec, req)
 
 	var payload map[string]any
 	json.Unmarshal(receivedBody, &payload)
@@ -156,7 +162,7 @@ func TestChatCompletionsHandler_ParsesNonStreamUsage(t *testing.T) {
 	models := map[string]ModelConfig{"m": {Provider: "gemini", Model: "m-real", PriceInPerMillion: 2_000_000, PriceOutPerMillion: 4_000_000}}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"m"}`))
 	rec := httptest.NewRecorder()
-	newChatCompletionsHandler(http.DefaultClient, "k", models, hub, testStore()).ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "k", models, hub, testStore(), testBudget()).ServeHTTP(rec, req)
 
 	if !strings.Contains(rec.Body.String(), `"content":"hi"`) {
 		t.Errorf("respons upstream nggak diteruskan utuh ke klien: %q", rec.Body.String())
@@ -204,7 +210,7 @@ func TestChatCompletionsHandler_ParsesStreamUsage(t *testing.T) {
 	models := map[string]ModelConfig{"m": {Provider: "gemini", Model: "m-real", PriceInPerMillion: 1_000_000, PriceOutPerMillion: 1_000_000}}
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"stream":true,"model":"m"}`))
 	rec := httptest.NewRecorder()
-	newChatCompletionsHandler(http.DefaultClient, "k", models, hub, testStore()).ServeHTTP(rec, req)
+	newChatCompletionsHandler(http.DefaultClient, "k", models, hub, testStore(), testBudget()).ServeHTTP(rec, req)
 
 	select {
 	case ev := <-ch:

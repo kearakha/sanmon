@@ -31,7 +31,7 @@ func TestChatCompletionsHandler_ClientCancelPropagatesToUpstream(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore()).ServeHTTP(rec, req)
+		newChatCompletionsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore(), testBudget()).ServeHTTP(rec, req)
 		close(done)
 	}()
 
@@ -62,7 +62,7 @@ func TestEmbeddingsHandler_Passthrough(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"input":"halo"}`))
 	rec := httptest.NewRecorder()
 
-	newEmbeddingsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore()).ServeHTTP(rec, req)
+	newEmbeddingsHandler(http.DefaultClient, "test-key", nil, NewHub(), testStore(), testBudget()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
