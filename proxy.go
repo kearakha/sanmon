@@ -13,7 +13,56 @@ import (
 // var, bukan const — dites di proxy_test.go dengan diarahin ke httptest.Server palsu.
 var geminiBaseURL = "https://generativelanguage.googleapis.com/v1beta/openai"
 
-func newChatCompletionsHandler(client *http.Client, apiKey string, hub *Hub) http.HandlerFunc {
+var usageMarker = []byte(`"usage"`)
+
+// emitEvent nyebar satu Event ke live feed (Hub) sekaligus antrian persist
+// (Store). Dua-duanya non-blocking — jalur proxy nggak pernah nunggu (aturan
+// keras #1). Provider di-default ke "gemini" (satu-satunya upstream sampai
+// OpenRouter masuk di M4) biar kolom NOT NULL di tabel requests kepenuhin
+// walau jalur error nggak sempet resolve lewat calcCost.
+func emitEvent(hub *Hub, store *Store, ev Event) {
+	if ev.Provider == "" {
+		ev.Provider = "gemini"
+	}
+	hub.Broadcast(ev)
+	store.Enqueue(ev)
+}
+
+// calcCost nyocokin model yang diminta klien ke tabel harga di config.
+// Ketemu → biaya integer micro-USD (aturan keras #2, no float). Nggak ketemu →
+// cost_unknown, biaya 0 (aturan keras #3 — nol jujur, bukan nol bohong).
+func calcCost(models map[string]ModelConfig, model string, tokensIn, tokensOut int) (provider, modelResolved string, costMicroUSD int64, costUnknown bool) {
+	mc, ok := models[model]
+	if !ok {
+		return "gemini", "", 0, true
+	}
+	cost := int64(tokensIn)*mc.PriceInPerMillion/1_000_000 + int64(tokensOut)*mc.PriceOutPerMillion/1_000_000
+	return mc.Provider, mc.Model, cost, false
+}
+
+// parseUsage baca objek "usage" dari body respons JSON (non-stream chat atau
+// embeddings). Best-effort — body bukan JSON / nggak ada usage → 0, 0.
+func parseUsage(body []byte) (tokensIn, tokensOut int) {
+	var r struct {
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+		} `json:"usage"`
+	}
+	json.Unmarshal(body, &r)
+	return r.Usage.PromptTokens, r.Usage.CompletionTokens
+}
+
+// parseSSEUsage baca objek usage dari satu event SSE ("data: {...}").
+func parseSSEUsage(event []byte) (tokensIn, tokensOut int) {
+	_, after, found := bytes.Cut(event, []byte("data:"))
+	if !found {
+		return 0, 0
+	}
+	return parseUsage(bytes.TrimSpace(after))
+}
+
+func newChatCompletionsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -59,11 +108,11 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, hub *Hub) htt
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("chat completions dibatalin", "reason", r.Context().Err())
-				hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -72,17 +121,30 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, hub *Hub) htt
 		w.WriteHeader(resp.StatusCode)
 
 		if !streaming {
-			io.Copy(w, resp.Body)
-			hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: false, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()})
+			respBody, _ := io.ReadAll(resp.Body)
+			w.Write(respBody)
+			tokensIn, tokensOut := parseUsage(respBody)
+			provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
+			emitEvent(hub, store, Event{
+				Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+				Stream: false, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
+				TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
+			})
 			return
 		}
 
-		partial, streamErr := streamBody(w, r, resp.Body)
-		hub.Broadcast(Event{Time: time.Now(), Model: model, Stream: true, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(), Partial: partial, Error: streamErr})
+		partial, streamErr, tokensIn, tokensOut := streamBody(w, r, resp.Body)
+		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
+		emitEvent(hub, store, Event{
+			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+			Stream: true, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
+			TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
+			Partial: partial, Error: streamErr,
+		})
 	}
 }
 
-func newEmbeddingsHandler(client *http.Client, apiKey string, hub *Hub) http.HandlerFunc {
+func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -108,19 +170,27 @@ func newEmbeddingsHandler(client *http.Client, apiKey string, hub *Hub) http.Han
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("embeddings dibatalin", "reason", r.Context().Err())
-				hub.Broadcast(Event{Time: time.Now(), Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, Event{Time: time.Now(), Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			hub.Broadcast(Event{Time: time.Now(), Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, Event{Time: time.Now(), Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
 
 		copyHeader(w, resp)
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-		hub.Broadcast(Event{Time: time.Now(), Model: model, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds()})
+		respBody, _ := io.ReadAll(resp.Body)
+		w.Write(respBody)
+
+		tokensIn, _ := parseUsage(respBody) // embeddings: cuma input token, nggak ada output
+		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, 0)
+		emitEvent(hub, store, Event{
+			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+			StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
+			TokensIn: tokensIn, CostMicroUSD: cost, CostUnknown: unknown,
+		})
 	}
 }
 
@@ -136,34 +206,53 @@ func copyHeader(w http.ResponseWriter, resp *http.Response) {
 // motong upstream begitu klien putus lewat context propagation. Balikin
 // partial=true kalau stream nggak nyampe EOF wajar (klien putus / error
 // upstream di tengah), buat ngisi Event.Partial di live feed.
-func streamBody(w http.ResponseWriter, r *http.Request, upstream io.Reader) (partial bool, errMsg string) {
+//
+// Sambil nyalurin, tiap event SSE lengkap discan: yang punya "usage" disimpan,
+// lalu di-parse pas stream kelar → tokensIn/tokensOut. Buffer tetap bounded
+// (~satu chunk + satu baris usage), bukan numpuk seluruh stream.
+func streamBody(w http.ResponseWriter, r *http.Request, upstream io.Reader) (partial bool, errMsg string, tokensIn, tokensOut int) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		io.Copy(w, upstream)
-		return false, ""
+		return false, "", 0, 0
 	}
 
 	buf := make([]byte, 4096)
+	var pending []byte   // byte SSE yang belum ketemu batas "\n\n"
+	var lastUsage []byte // event terakhir yang ngandung "usage"
 	for {
 		n, err := upstream.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
-				return true, ""
+				return true, "", 0, 0
 			}
 			flusher.Flush()
+
+			pending = append(pending, buf[:n]...)
+			for {
+				i := bytes.Index(pending, []byte("\n\n"))
+				if i < 0 {
+					break
+				}
+				if event := pending[:i]; bytes.Contains(event, usageMarker) {
+					lastUsage = append(lastUsage[:0], event...)
+				}
+				pending = pending[i+2:]
+			}
 		}
 		if err != nil {
 			if err == io.EOF {
-				return false, ""
+				ti, to := parseSSEUsage(lastUsage)
+				return false, "", ti, to
 			}
 			if r.Context().Err() != nil {
 				slog.Info("stream dipotong: klien putus", "reason", r.Context().Err())
-				return true, ""
+				return true, "", 0, 0
 			}
 			slog.Warn("stream keputus di tengah jalan", "err", err)
 			fmt.Fprint(w, "event: error\ndata: {\"error\":\"upstream stream interrupted\"}\n\n")
 			flusher.Flush()
-			return true, "upstream stream interrupted"
+			return true, "upstream stream interrupted", 0, 0
 		}
 	}
 }

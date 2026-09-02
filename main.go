@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+const (
+	// Baris requests lebih tua dari retentionKeep dihapus (PRD §M3), disapu
+	// tiap retentionSweep. Nilai tetap — nggak masuk config (CLAUDE.md: no
+	// config buat nilai yang nggak pernah berubah).
+	retentionKeep  = 30 * 24 * time.Hour
+	retentionSweep = 1 * time.Hour
+)
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
@@ -31,12 +39,14 @@ func main() {
 	}
 	defer db.Close()
 
+	store := NewStore(db)
+
 	hub := NewHub()
 	go hub.Run()
 
 	v1 := http.NewServeMux()
-	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, hub))
-	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, hub))
+	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
+	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
 	v1.HandleFunc("GET /v1/models", newModelsHandler(httpClient, cfg.GeminiAPIKey))
 
 	mux := http.NewServeMux()
@@ -53,6 +63,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go store.Run(ctx)
+	go store.RunRetention(ctx, retentionSweep, retentionKeep)
 
 	go func() {
 		slog.Info("server starting", "addr", addr)
