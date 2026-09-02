@@ -44,6 +44,8 @@ func main() {
 	hub := NewHub()
 	go hub.Run()
 
+	limiters := newKeyLimiters()
+
 	v1 := http.NewServeMux()
 	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
 	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
@@ -51,7 +53,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("/v1/", requireVirtualKey(db, v1))
+	mux.Handle("/v1/", requireVirtualKey(db, limiters, v1))
 	mux.HandleFunc("GET /admin/stream", requireAdminQueryToken(cfg.AdminToken, newStreamHandler(hub)))
 	mux.HandleFunc("GET /admin/requests", requireAdminQueryToken(cfg.AdminToken, newRequestsListHandler(db)))
 	mux.HandleFunc("GET /admin/requests/{id}", requireAdminQueryToken(cfg.AdminToken, newRequestHandler(db)))
