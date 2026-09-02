@@ -38,6 +38,18 @@ type RequestRow = {
   response_body?: string | null;
 };
 
+// Cocok sama DailyStat di stats.go (GET /admin/stats). cost_micro_usd cuma
+// baris cost_unknown=false; baris tanpa harga kehitung di cost_unknown_count.
+type DailyStat = {
+  day: string;
+  requests: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_micro_usd: number;
+  cost_unknown_count: number;
+  errors: number;
+};
+
 const GATEWAY_URL = "http://localhost:8777";
 const ADMIN_TOKEN = import.meta.env.VITE_SANMON_ADMIN_TOKEN as
   string | undefined;
@@ -314,14 +326,23 @@ function RequestDetail({ id, onClose }: { id: number; onClose: () => void }) {
 }
 
 // HistoryPage: tabel riwayat dari GET /admin/requests. Pagination keyset
-// (before_id) — "muat lebih", bukan nomor halaman. Filter model & status
-// di-debounce biar nggak nembak tiap ketikan.
-function HistoryPage() {
+// (before_id) — "muat lebih", bukan nomor halaman. Filter model/status/tanggal
+// di-debounce biar nggak nembak tiap ketikan. initialSince/initialUntil diisi
+// pas dateng dari klik baris di halaman Harian.
+function HistoryPage({
+  initialSince = "",
+  initialUntil = "",
+}: {
+  initialSince?: string;
+  initialUntil?: string;
+}) {
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [nextBeforeId, setNextBeforeId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [model, setModel] = useState("");
   const [status, setStatus] = useState("");
+  const [since, setSince] = useState(initialSince);
+  const [until, setUntil] = useState(initialUntil);
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   function buildURL(beforeId: number | null): string {
@@ -331,6 +352,8 @@ function HistoryPage() {
     });
     if (model.trim()) p.set("model", model.trim());
     if (status.trim()) p.set("status", status.trim());
+    if (since) p.set("since", since);
+    if (until) p.set("until", until);
     if (beforeId != null) p.set("before_id", String(beforeId));
     return `${GATEWAY_URL}/admin/requests?${p}`;
   }
@@ -359,7 +382,7 @@ function HistoryPage() {
     const t = setTimeout(() => fetchPage(true), 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model, status]);
+  }, [model, status, since, until]);
 
   if (!ADMIN_TOKEN) {
     return (
@@ -390,6 +413,20 @@ function HistoryPage() {
           placeholder="status"
           inputMode="numeric"
           className="w-24 border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--accent)]"
+        />
+        <input
+          type="date"
+          value={since}
+          onChange={(e) => setSince(e.target.value)}
+          aria-label="dari tanggal"
+          className="border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-[var(--text)] outline-none focus:border-[var(--accent)]"
+        />
+        <input
+          type="date"
+          value={until}
+          onChange={(e) => setUntil(e.target.value)}
+          aria-label="sampai tanggal"
+          className="border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-[var(--text)] outline-none focus:border-[var(--accent)]"
         />
       </div>
 
@@ -455,13 +492,117 @@ function HistoryPage() {
   );
 }
 
+// DailyPage: agregat harian dari GET /admin/stats, terbaru dulu. Klik baris →
+// buka Riwayat yang udah ke-filter ke tanggal itu (since = until = hari itu).
+// Tanpa animasi — DESIGN.md batasin gerak cuma di 3 tempat, ini bukan salah
+// satunya.
+function DailyPage({ onPickDay }: { onPickDay: (day: string) => void }) {
+  const [days, setDays] = useState<DailyStat[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!ADMIN_TOKEN) return;
+    let alive = true;
+    fetch(`${GATEWAY_URL}/admin/stats?token=${encodeURIComponent(ADMIN_TOKEN)}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((data: { days: DailyStat[] }) => {
+        if (alive) setDays(data.days);
+      })
+      .catch(() => {
+        if (alive) setError("gagal memuat agregat");
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  if (!ADMIN_TOKEN) {
+    return (
+      <p className="font-mono-nums text-xs text-[var(--text-dim)]">
+        VITE_SANMON_ADMIN_TOKEN belum diset
+      </p>
+    );
+  }
+
+  return (
+    <div>
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-[var(--border)] text-left text-[var(--text-dim)]">
+            <th className="py-2 font-normal">tanggal</th>
+            <th className="py-2 font-normal text-right">request</th>
+            <th className="py-2 font-normal text-right">tok in/out</th>
+            <th className="py-2 font-normal text-right">biaya</th>
+            <th className="py-2 font-normal text-right">error</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono-nums">
+          {days.map((d) => (
+            <tr
+              key={d.day}
+              onClick={() => onPickDay(d.day)}
+              className="border-b border-[var(--border)] cursor-pointer hover:bg-[var(--panel)]"
+            >
+              <td className="py-2 text-[var(--text-dim)]">{d.day}</td>
+              <td className="py-2 text-right">{d.requests}</td>
+              <td className="py-2 text-right">
+                {d.tokens_in}/{d.tokens_out}
+              </td>
+              <td className="py-2 text-right">
+                ${(d.cost_micro_usd / 1_000_000).toFixed(4)}
+                {d.cost_unknown_count > 0 && (
+                  <span className="text-[var(--accent)]">
+                    {" "}
+                    +{d.cost_unknown_count}?
+                  </span>
+                )}
+              </td>
+              <td
+                className={`py-2 text-right ${
+                  d.errors > 0
+                    ? "text-[var(--accent)]"
+                    : "text-[var(--text-dim)]"
+                }`}
+              >
+                {d.errors}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {days.length === 0 && !loading && !error && (
+        <p className="py-4 font-mono-nums text-xs text-[var(--text-dim)]">
+          belum ada data
+        </p>
+      )}
+      {error && <p className="py-4 text-sm text-[var(--accent)]">{error}</p>}
+    </div>
+  );
+}
+
 function App() {
-  const [view, setView] = useState<"live" | "history">("live");
+  const [view, setView] = useState<"live" | "history" | "daily">("live");
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  // Tanggal yang dibawa dari klik baris di Harian ke Riwayat. Tombol "riwayat"
+  // di header nge-reset ini biar nggak nyangkut ngefilter diam-diam.
+  const [histDates, setHistDates] = useState({ since: "", until: "" });
   const nextId = useRef(0);
   const animatedIds = useRef<Set<number>>(new Set());
+
+  function openHistory(since: string, until: string) {
+    setHistDates({ since, until });
+    setView("history");
+  }
 
   useEffect(() => {
     if (!ADMIN_TOKEN) return;
@@ -521,7 +662,7 @@ function App() {
             live feed
           </button>{" "}
           <button
-            onClick={() => setView("history")}
+            onClick={() => openHistory("", "")}
             className={
               view === "history"
                 ? "text-[var(--accent)]"
@@ -529,6 +670,16 @@ function App() {
             }
           >
             riwayat
+          </button>{" "}
+          <button
+            onClick={() => setView("daily")}
+            className={
+              view === "daily"
+                ? "text-[var(--accent)]"
+                : "hover:text-[var(--text)]"
+            }
+          >
+            harian
           </button>
         </h1>
         {view === "live" && (
@@ -543,8 +694,14 @@ function App() {
       </header>
 
       <main className="flex-1 px-6 py-4">
-        {view === "history" ? (
-          <HistoryPage />
+        {view === "daily" ? (
+          <DailyPage onPickDay={(day) => openHistory(day, day)} />
+        ) : view === "history" ? (
+          <HistoryPage
+            key={`${histDates.since}|${histDates.until}`}
+            initialSince={histDates.since}
+            initialUntil={histDates.until}
+          />
         ) : selected ? (
           <DetailPanel ev={selected} onClose={closeDetail} />
         ) : (
