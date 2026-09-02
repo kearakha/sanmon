@@ -7,17 +7,24 @@ import (
 )
 
 // Event adalah satu baris live feed: ringkasan satu request yang udah kelar
-// diproses proxy. Token & biaya belum ada di sini — nyusul M3 pas usage
-// beneran di-parse dan tabel harga config kepake (aturan keras #3: nol yang
-// jujur, bukan nol yang bohong — jadi field-nya nggak diisi 0 palsu sekarang).
+// diproses proxy. Dipakai dua arah — di-broadcast ke Hub (live feed SSE) dan
+// di-Enqueue ke Store (persist Postgres) — biar nggak ada dua struct buat
+// satu konsep yang sama. Field yang belum keisi (mis. token/biaya sebelum
+// usage di-parse) sengaja omitempty, bukan diisi 0 palsu (aturan keras #3).
 type Event struct {
-	Time       time.Time `json:"time"`
-	Model      string    `json:"model"`
-	Stream     bool      `json:"stream"`
-	StatusCode int       `json:"status_code"`
-	LatencyMs  int64     `json:"latency_ms"`
-	Partial    bool      `json:"partial,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	Time          time.Time `json:"time"`
+	Model         string    `json:"model"`
+	Provider      string    `json:"provider,omitempty"`
+	ModelResolved string    `json:"model_resolved,omitempty"`
+	Stream        bool      `json:"stream"`
+	StatusCode    int       `json:"status_code"`
+	LatencyMs     int64     `json:"latency_ms"`
+	TokensIn      int       `json:"tokens_in,omitempty"`
+	TokensOut     int       `json:"tokens_out,omitempty"`
+	CostMicroUSD  int64     `json:"cost_micro_usd,omitempty"`
+	CostUnknown   bool      `json:"cost_unknown,omitempty"`
+	Partial       bool      `json:"partial,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 // Hub itu fan-out SSE: satu goroutine (Run) jadi pemilik tunggal map
