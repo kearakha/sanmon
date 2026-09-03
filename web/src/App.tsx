@@ -50,6 +50,18 @@ type DailyStat = {
   errors: number;
 };
 
+// Cocok sama KeyRow di keys.go (GET /admin/keys). Field pointer di Go →
+// nullable di sini.
+type KeyRow = {
+  id: number;
+  name: string;
+  monthly_budget_micro_usd: number | null;
+  rpm_limit: number | null;
+  log_bodies: boolean;
+  disabled: boolean;
+  created_at: string;
+};
+
 const GATEWAY_URL = "http://localhost:8777";
 const ADMIN_TOKEN = import.meta.env.VITE_SANMON_ADMIN_TOKEN as
   string | undefined;
@@ -80,6 +92,12 @@ function formatCost(row: {
   if (row.cost_unknown) return "?";
   if (row.cost_micro_usd == null) return "-";
   return `$${(row.cost_micro_usd / 1_000_000).toFixed(6)}`;
+}
+
+// Budget bulanan per key disimpan integer micro-USD (aturan keras #2).
+function formatBudget(micro: number | null): string {
+  if (micro == null) return "-";
+  return `$${(micro / 1_000_000).toFixed(2)}`;
 }
 
 // Titik 1 & 2: baris masuk (fade + geser) dibarengin angka latency ngeroll
@@ -588,8 +606,267 @@ function DailyPage({ onPickDay }: { onPickDay: (day: string) => void }) {
   );
 }
 
+// KeysPage: kelola virtual key (DESIGN.md §Halaman #4). List dari
+// GET /admin/keys, buat lewat POST (token plaintext cuma balik sekali —
+// ditahan di kotak sampai ditutup manual), nonaktifin lewat DELETE
+// (soft delete; klik-dua karena mutus akses konsumen & nggak ada jalan
+// balik dari UI). Tanpa animasi — bukan 1 dari 3 titik DESIGN.md.
+function KeysPage() {
+  const [keys, setKeys] = useState<KeyRow[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const [name, setName] = useState("");
+  const [rpm, setRpm] = useState("");
+  const [budget, setBudget] = useState("");
+  const [logBodies, setLogBodies] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [newToken, setNewToken] = useState<{
+    name: string;
+    token: string;
+  } | null>(null);
+
+  // Baris yang lagi nunggu klik konfirmasi kedua buat dinonaktifin.
+  const [confirmingId, setConfirmingId] = useState<number | null>(null);
+
+  async function load() {
+    if (!ADMIN_TOKEN) return;
+    try {
+      const res = await fetch(
+        `${GATEWAY_URL}/admin/keys?token=${encodeURIComponent(ADMIN_TOKEN)}`,
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { keys: KeyRow[] };
+      setKeys(data.keys);
+      setError(null);
+    } catch {
+      setError("gagal memuat keys");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ADMIN_TOKEN || !name.trim()) return;
+    setFormError(null);
+
+    const body: Record<string, unknown> = {
+      name: name.trim(),
+      log_bodies: logBodies,
+    };
+    if (rpm.trim()) {
+      const n = Number(rpm);
+      if (!Number.isInteger(n) || n < 1) {
+        setFormError("rpm harus bilangan bulat >= 1");
+        return;
+      }
+      body.rpm_limit = n;
+    }
+    if (budget.trim()) {
+      const d = Number(budget);
+      if (!Number.isFinite(d) || d < 0) {
+        setFormError("budget harus angka >= 0");
+        return;
+      }
+      body.monthly_budget_micro_usd = Math.round(d * 1_000_000);
+    }
+
+    setCreating(true);
+    try {
+      // tanpa header Content-Type → body jadi text/plain → simple request,
+      // nggak kena preflight. Handler Go nggak ngecek Content-Type.
+      const res = await fetch(
+        `${GATEWAY_URL}/admin/keys?token=${encodeURIComponent(ADMIN_TOKEN)}`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      if (!res.ok) {
+        const j = (await res.json().catch(() => null)) as {
+          error?: string;
+        } | null;
+        throw new Error(j?.error ?? `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as { name: string; token: string };
+      setNewToken({ name: data.name, token: data.token });
+      setName("");
+      setRpm("");
+      setBudget("");
+      setLogBodies(false);
+      load();
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : "gagal bikin key");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function deactivate(id: number) {
+    if (!ADMIN_TOKEN) return;
+    if (confirmingId !== id) {
+      setConfirmingId(id);
+      return;
+    }
+    try {
+      await fetch(
+        `${GATEWAY_URL}/admin/keys/${id}?token=${encodeURIComponent(ADMIN_TOKEN)}`,
+        { method: "DELETE" },
+      );
+    } catch {
+      // biarin — load() di bawah bakal nunjukin state sebenernya
+    } finally {
+      setConfirmingId(null);
+      load();
+    }
+  }
+
+  if (!ADMIN_TOKEN) {
+    return (
+      <p className="font-mono-nums text-xs text-[var(--text-dim)]">
+        VITE_SANMON_ADMIN_TOKEN belum diset
+      </p>
+    );
+  }
+
+  const inputCls =
+    "border border-[var(--border)] bg-[var(--panel)] px-2 py-1 text-[var(--text)] outline-none placeholder:text-[var(--text-dim)] focus:border-[var(--accent)]";
+
+  return (
+    <div>
+      {newToken && (
+        <div className="mb-4 border border-[var(--accent)] bg-[var(--panel)] p-4">
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="text-xs tracking-widest text-[var(--accent)] uppercase">
+              token buat “{newToken.name}”
+            </span>
+            <button
+              onClick={() => setNewToken(null)}
+              className="text-xs text-[var(--text-dim)] hover:text-[var(--text)]"
+            >
+              tutup
+            </button>
+          </div>
+          <code className="block font-mono-nums text-sm break-all text-[var(--text)]">
+            {newToken.token}
+          </code>
+          <p className="mt-2 font-mono-nums text-xs text-[var(--text-dim)]">
+            simpan sekarang — nggak akan muncul lagi.
+          </p>
+        </div>
+      )}
+
+      <form
+        onSubmit={create}
+        className="mb-6 flex flex-wrap items-center gap-3 font-mono-nums text-xs"
+      >
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="nama key"
+          required
+          className={inputCls}
+        />
+        <input
+          value={rpm}
+          onChange={(e) => setRpm(e.target.value)}
+          placeholder="rpm (opsional)"
+          inputMode="numeric"
+          className={`w-36 ${inputCls}`}
+        />
+        <input
+          value={budget}
+          onChange={(e) => setBudget(e.target.value)}
+          placeholder="budget $/bln (opsional)"
+          inputMode="decimal"
+          className={`w-44 ${inputCls}`}
+        />
+        <label className="flex items-center gap-1 text-[var(--text-dim)]">
+          <input
+            type="checkbox"
+            checked={logBodies}
+            onChange={(e) => setLogBodies(e.target.checked)}
+          />
+          rekam body
+        </label>
+        <button
+          type="submit"
+          disabled={creating || !name.trim()}
+          className="border border-[var(--border)] px-3 py-1 text-[var(--text-dim)] hover:border-[var(--accent)] hover:text-[var(--text)] disabled:opacity-50"
+        >
+          {creating ? "membuat..." : "buat key"}
+        </button>
+        {formError && <span className="text-[var(--accent)]">{formError}</span>}
+      </form>
+
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr className="border-b border-[var(--border)] text-left text-[var(--text-dim)]">
+            <th className="py-2 font-normal">id</th>
+            <th className="py-2 font-normal">nama</th>
+            <th className="py-2 font-normal text-right">rpm</th>
+            <th className="py-2 font-normal text-right">budget/bln</th>
+            <th className="py-2 font-normal text-right">body</th>
+            <th className="py-2 font-normal text-right">dibuat</th>
+            <th className="py-2 font-normal text-right">aksi</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono-nums">
+          {keys.map((k) => (
+            <tr
+              key={k.id}
+              className={`border-b border-[var(--border)] ${
+                k.disabled ? "opacity-40" : ""
+              }`}
+            >
+              <td className="py-2 text-[var(--text-dim)]">{k.id}</td>
+              <td className="py-2">{k.name}</td>
+              <td className="py-2 text-right">{k.rpm_limit ?? "-"}</td>
+              <td className="py-2 text-right">
+                {formatBudget(k.monthly_budget_micro_usd)}
+              </td>
+              <td className="py-2 text-right">{k.log_bodies ? "ya" : "-"}</td>
+              <td className="py-2 text-right text-[var(--text-dim)]">
+                {new Date(k.created_at).toLocaleDateString("id-ID")}
+              </td>
+              <td className="py-2 text-right">
+                {k.disabled ? (
+                  <span className="text-[var(--text-dim)]">nonaktif</span>
+                ) : (
+                  <button
+                    onClick={() => deactivate(k.id)}
+                    onBlur={() =>
+                      setConfirmingId((cur) => (cur === k.id ? null : cur))
+                    }
+                    className="text-xs text-[var(--text-dim)] hover:text-[var(--accent)]"
+                  >
+                    {confirmingId === k.id ? "yakin?" : "nonaktifkan"}
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {keys.length === 0 && !loading && !error && (
+        <p className="py-4 font-mono-nums text-xs text-[var(--text-dim)]">
+          belum ada key
+        </p>
+      )}
+      {error && <p className="py-4 text-sm text-[var(--accent)]">{error}</p>}
+    </div>
+  );
+}
+
 function App() {
-  const [view, setView] = useState<"live" | "history" | "daily">("live");
+  const [view, setView] = useState<"live" | "history" | "daily" | "keys">(
+    "live",
+  );
   const [events, setEvents] = useState<LiveEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -680,6 +957,16 @@ function App() {
             }
           >
             harian
+          </button>{" "}
+          <button
+            onClick={() => setView("keys")}
+            className={
+              view === "keys"
+                ? "text-[var(--accent)]"
+                : "hover:text-[var(--text)]"
+            }
+          >
+            keys
           </button>
         </h1>
         {view === "live" && (
@@ -694,7 +981,9 @@ function App() {
       </header>
 
       <main className="flex-1 px-6 py-4">
-        {view === "daily" ? (
+        {view === "keys" ? (
+          <KeysPage />
+        ) : view === "daily" ? (
           <DailyPage onPickDay={(day) => openHistory(day, day)} />
         ) : view === "history" ? (
           <HistoryPage
