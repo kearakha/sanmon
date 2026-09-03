@@ -63,8 +63,12 @@ type KeyRow = {
 };
 
 const GATEWAY_URL = "http://localhost:8777";
-const ADMIN_TOKEN = import.meta.env.VITE_SANMON_ADMIN_TOKEN as
-  string | undefined;
+// Token dibaca dari ?token= saat runtime (deploy: buka dashboard dengan
+// ?token=...), fallback ke env buat dev. Bundel yang di-embed ke binary
+// nggak boleh nyimpen token — repo publik.
+const ADMIN_TOKEN =
+  new URLSearchParams(location.search).get("token") ||
+  (import.meta.env.VITE_SANMON_ADMIN_TOKEN as string | undefined);
 const MAX_ROWS = 50;
 const PAGE_SIZE = 50;
 
