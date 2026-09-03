@@ -17,9 +17,9 @@
 
 # Node / frontend
 node_modules/
-dist/
 .vite/
 *.local
+# web/dist sengaja di-commit — ditanam ke binary lewat //go:embed (PRD §4)
 
 # Editor & OS
 .DS_Store
