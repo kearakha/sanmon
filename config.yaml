@@ -1,11 +1,12 @@
 port: 8777
 
-models: {}
-# Peta alias -> provider, nama model asli, dan harga per 1 juta token.
-# Contoh (diisi mulai M1):
-# models:
-#   gemini-flash:
-#     provider: gemini
-#     model: gemini-2.5-flash
-#     price_in_per_million: 150000
-#     price_out_per_million: 600000
+# Peta alias -> provider, nama model asli, dan harga per 1 juta token
+# (satuan micro-USD: 150000 = $0.15 / 1 juta token).
+models:
+  gemini-3.6-flash:
+    provider: gemini
+    model: gemini-3.6-flash
+    # PLACEHOLDER — angka ini harga Gemini 2.5 Flash. Koreksi kalau harga
+    # 3.6 Flash yang asli udah ketahuan.
+    price_in_per_million: 150000
+    price_out_per_million: 600000
