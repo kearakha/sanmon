@@ -69,6 +69,14 @@ func main() {
 	mux.HandleFunc("GET /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeysListHandler(db)))
 	mux.HandleFunc("POST /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeyCreateHandler(db)))
 	mux.HandleFunc("DELETE /admin/keys/{id}", requireAdminQueryToken(cfg.AdminToken, newKeyDeleteHandler(db)))
+	// DELETE cross-origin selalu kena preflight. Preflight nggak boleh butuh
+	// auth — cukup balikin header CORS-nya. POST /admin/keys nggak perlu ini:
+	// dashboard kirim body tanpa Content-Type custom, jadi simple request.
+	mux.HandleFunc("OPTIONS /admin/keys/{id}", func(w http.ResponseWriter, r *http.Request) {
+		writeDashboardCORS(w)
+		w.Header().Set("Access-Control-Allow-Methods", "DELETE")
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{

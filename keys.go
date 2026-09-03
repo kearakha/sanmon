@@ -93,6 +93,8 @@ type keyCreateReq struct {
 // diambil lagi setelahnya).
 func newKeyCreateHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		writeDashboardCORS(w) // di atas: dashboard :8778 harus bisa baca respons + error
+
 		var req keyCreateReq
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeJSONError(w, http.StatusBadRequest, "body bukan JSON valid")
@@ -143,6 +145,8 @@ func newKeyCreateHandler(db *sql.DB) http.HandlerFunc {
 // ini. 404 kalau id-nya nggak ada.
 func newKeyDeleteHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		writeDashboardCORS(w)
+
 		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "id harus angka")
