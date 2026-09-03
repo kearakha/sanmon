@@ -77,6 +77,9 @@ func main() {
 		w.Header().Set("Access-Control-Allow-Methods", "DELETE")
 		w.WriteHeader(http.StatusNoContent)
 	})
+	// Catch-all: dashboard SPA + asetnya. ServeMux longest-match jadi rute
+	// di atas ("/v1/", "/admin/...", "/healthz") tetap menang.
+	mux.Handle("/", newSPAHandler())
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
