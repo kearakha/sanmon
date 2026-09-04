@@ -17,7 +17,6 @@ type ModelConfig struct {
 type Config struct {
 	Port         int                    `yaml:"port"`
 	Models       map[string]ModelConfig `yaml:"models"`
-	VirtualKey   string                 `yaml:"-"`
 	GeminiAPIKey string                 `yaml:"-"`
 	AdminToken   string                 `yaml:"-"`
 	DatabaseURL  string                 `yaml:"-"`
@@ -40,11 +39,6 @@ func loadConfig(path string) (Config, error) {
 			return Config{}, fmt.Errorf("parse SANMON_PORT: %w", err)
 		}
 		cfg.Port = port
-	}
-
-	cfg.VirtualKey = os.Getenv("SANMON_VIRTUAL_KEY")
-	if cfg.VirtualKey == "" {
-		return Config{}, fmt.Errorf("SANMON_VIRTUAL_KEY wajib diisi")
 	}
 
 	cfg.GeminiAPIKey = os.Getenv("GEMINI_API_KEY")

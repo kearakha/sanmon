@@ -20,12 +20,16 @@ var usageMarker = []byte(`"usage"`)
 // keras #1). Provider di-default ke "gemini" (satu-satunya upstream sampai
 // OpenRouter masuk di M4) biar kolom NOT NULL di tabel requests kepenuhin
 // walau jalur error nggak sempet resolve lewat calcCost.
-func emitEvent(hub *Hub, store *Store, ev Event) {
+func emitEvent(hub *Hub, store *Store, budget *budgetTracker, ev Event) {
 	if ev.Provider == "" {
 		ev.Provider = "gemini"
 	}
 	hub.Broadcast(ev)
 	store.Enqueue(ev)
+	// Sync di sini, bukan di Store worker: biaya harus keitung walau event
+	// log-nya kebuang pas antrian penuh (justru pas trafik ramai budget mesti
+	// akurat). atomic.Add di jalur proxy murah.
+	budget.add(ev.KeyID, ev.CostMicroUSD)
 }
 
 // calcCost nyocokin model yang diminta klien ke tabel harga di config.
@@ -62,9 +66,10 @@ func parseSSEUsage(event []byte) (tokensIn, tokensOut int) {
 	return parseUsage(bytes.TrimSpace(after))
 }
 
-func newChatCompletionsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
+func newChatCompletionsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store, budget *budgetTracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		keyID := keyFromContext(r.Context()).ID
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -108,11 +113,11 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("chat completions dibatalin", "reason", r.Context().Err())
-				emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, budget, Event{Time: time.Now(), KeyID: keyID, Model: model, Stream: streaming, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			emitEvent(hub, store, Event{Time: time.Now(), Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, budget, Event{Time: time.Now(), KeyID: keyID, Model: model, Stream: streaming, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -125,8 +130,8 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 			w.Write(respBody)
 			tokensIn, tokensOut := parseUsage(respBody)
 			provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
-			emitEvent(hub, store, Event{
-				Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+			emitEvent(hub, store, budget, Event{
+				Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 				Stream: false, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 				TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
 			})
@@ -135,8 +140,8 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 
 		partial, streamErr, tokensIn, tokensOut := streamBody(w, r, resp.Body)
 		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, tokensOut)
-		emitEvent(hub, store, Event{
-			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+		emitEvent(hub, store, budget, Event{
+			Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 			Stream: true, StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 			TokensIn: tokensIn, TokensOut: tokensOut, CostMicroUSD: cost, CostUnknown: unknown,
 			Partial: partial, Error: streamErr,
@@ -144,9 +149,10 @@ func newChatCompletionsHandler(client *http.Client, apiKey string, models map[st
 	}
 }
 
-func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store) http.HandlerFunc {
+func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]ModelConfig, hub *Hub, store *Store, budget *budgetTracker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		keyID := keyFromContext(r.Context()).ID
 
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -170,11 +176,11 @@ func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]
 		if err != nil {
 			if r.Context().Err() != nil {
 				slog.Info("embeddings dibatalin", "reason", r.Context().Err())
-				emitEvent(hub, store, Event{Time: time.Now(), Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
+				emitEvent(hub, store, budget, Event{Time: time.Now(), KeyID: keyID, Model: model, LatencyMs: time.Since(start).Milliseconds(), Partial: true, Error: "klien putus sebelum upstream jawab"})
 				return
 			}
 			writeJSONError(w, http.StatusBadGateway, "gagal hubungin upstream")
-			emitEvent(hub, store, Event{Time: time.Now(), Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
+			emitEvent(hub, store, budget, Event{Time: time.Now(), KeyID: keyID, Model: model, StatusCode: http.StatusBadGateway, LatencyMs: time.Since(start).Milliseconds(), Error: err.Error()})
 			return
 		}
 		defer resp.Body.Close()
@@ -186,8 +192,8 @@ func newEmbeddingsHandler(client *http.Client, apiKey string, models map[string]
 
 		tokensIn, _ := parseUsage(respBody) // embeddings: cuma input token, nggak ada output
 		provider, resolved, cost, unknown := calcCost(models, model, tokensIn, 0)
-		emitEvent(hub, store, Event{
-			Time: time.Now(), Model: model, Provider: provider, ModelResolved: resolved,
+		emitEvent(hub, store, budget, Event{
+			Time: time.Now(), KeyID: keyID, Model: model, Provider: provider, ModelResolved: resolved,
 			StatusCode: resp.StatusCode, LatencyMs: time.Since(start).Milliseconds(),
 			TokensIn: tokensIn, CostMicroUSD: cost, CostUnknown: unknown,
 		})

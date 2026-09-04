@@ -44,17 +44,30 @@ func main() {
 	hub := NewHub()
 	go hub.Run()
 
+	limiters := newKeyLimiters()
+
+	budget := newBudgetTracker(db)
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := budget.seed(seedCtx); err != nil {
+		slog.Error("seed budget tracker", "err", err)
+		os.Exit(1)
+	}
+	seedCancel()
+
 	v1 := http.NewServeMux()
-	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
-	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store))
+	v1.HandleFunc("POST /v1/chat/completions", newChatCompletionsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store, budget))
+	v1.HandleFunc("POST /v1/embeddings", newEmbeddingsHandler(httpClient, cfg.GeminiAPIKey, cfg.Models, hub, store, budget))
 	v1.HandleFunc("GET /v1/models", newModelsHandler(httpClient, cfg.GeminiAPIKey))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealthz)
-	mux.Handle("/v1/", requireBearerToken(cfg.VirtualKey, v1))
+	mux.Handle("/v1/", requireVirtualKey(db, limiters, budget, v1))
 	mux.HandleFunc("GET /admin/stream", requireAdminQueryToken(cfg.AdminToken, newStreamHandler(hub)))
 	mux.HandleFunc("GET /admin/requests", requireAdminQueryToken(cfg.AdminToken, newRequestsListHandler(db)))
 	mux.HandleFunc("GET /admin/requests/{id}", requireAdminQueryToken(cfg.AdminToken, newRequestHandler(db)))
+	mux.HandleFunc("GET /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeysListHandler(db)))
+	mux.HandleFunc("POST /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeyCreateHandler(db)))
+	mux.HandleFunc("DELETE /admin/keys/{id}", requireAdminQueryToken(cfg.AdminToken, newKeyDeleteHandler(db)))
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
@@ -68,6 +81,7 @@ func main() {
 
 	go store.Run(ctx)
 	go store.RunRetention(ctx, retentionSweep, retentionKeep)
+	go budget.RunMonthlyReset(ctx)
 
 	go func() {
 		slog.Info("server starting", "addr", addr)

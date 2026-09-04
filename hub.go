@@ -13,6 +13,7 @@ import (
 // usage di-parse) sengaja omitempty, bukan diisi 0 palsu (aturan keras #3).
 type Event struct {
 	Time          time.Time `json:"time"`
+	KeyID         int64     `json:"key_id,omitempty"`
 	Model         string    `json:"model"`
 	Provider      string    `json:"provider,omitempty"`
 	ModelResolved string    `json:"model_resolved,omitempty"`

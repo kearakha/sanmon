@@ -1,9 +1,12 @@
 package main
 
 import (
-	"crypto/subtle"
+	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -13,15 +16,59 @@ func writeJSONError(w http.ResponseWriter, status int, msg string) {
 	fmt.Fprintf(w, `{"error":%q}`, msg)
 }
 
-// requireBearerToken dipakai buat /v1/* (virtual key) dan /admin/* yang
-// baca token dari header (bukan query param — itu jalur SSE di admin.go).
-func requireBearerToken(expected string, next http.Handler) http.Handler {
+// authedKey itu data key yang lolos auth, dititipin lewat context ke handler
+// proxy — dipakai buat ngisi requests.key_id (dan nanti rate limit + budget).
+type authedKey struct {
+	ID int64
+}
+
+type ctxKey int
+
+const keyCtxKey ctxKey = 0
+
+func keyFromContext(ctx context.Context) authedKey {
+	k, _ := ctx.Value(keyCtxKey).(authedKey)
+	return k
+}
+
+// requireVirtualKey auth buat /v1/* : ambil Bearer token, hash SHA-256, cocokin
+// ke kolom token_hash (UNIQUE, jadi sekali query ber-index) yang belum
+// disabled. Nggak ketemu → 401. Lewat jatah rpm_limit → 429. Budget bulanan
+// habis → 402. Lolos → key-nya dititipin ke context.
+func requireVirtualKey(db *sql.DB, lim *keyLimiters, budget *budgetTracker, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+		if !ok || token == "" {
 			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		var k authedKey
+		var rpm, monthlyBudget sql.NullInt64
+		err := db.QueryRowContext(r.Context(),
+			`SELECT id, rpm_limit, monthly_budget_micro_usd FROM keys WHERE token_hash = $1 AND NOT disabled`,
+			hashToken(token)).Scan(&k.ID, &rpm, &monthlyBudget)
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "gagal verifikasi key")
+			return
+		}
+
+		if !lim.allow(k.ID, int(rpm.Int64)) {
+			w.Header().Set("Retry-After", strconv.Itoa(max(1, 60/int(rpm.Int64))))
+			writeJSONError(w, http.StatusTooManyRequests, "rate limit key kelewat")
+			return
+		}
+
+		if !budget.allow(k.ID, monthlyBudget.Int64) {
+			writeJSONError(w, http.StatusPaymentRequired, "budget bulanan key habis")
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), keyCtxKey, k)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
