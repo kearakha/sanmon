@@ -166,6 +166,79 @@ func TestRequestsListHandler(t *testing.T) {
 	})
 }
 
+func TestRequestsListHandler_DateFilter(t *testing.T) {
+	db := openTestDB(t)
+	marker := "admin-date-test"
+	t.Cleanup(func() { db.Exec(`DELETE FROM requests WHERE model_requested = $1`, marker) })
+
+	// Seed di WIB (UTC+7, tanpa DST). Batas hari di admin.go dipotong di
+	// dashboardTZ, jadi baris harus dinilai per hari lokal, bukan hari UTC.
+	wib := time.FixedZone("WIB", 7*3600)
+	now := time.Now().In(wib)
+	atDay := func(d time.Time) time.Time {
+		return time.Date(d.Year(), d.Month(), d.Day(), 10, 0, 0, 0, wib)
+	}
+	mustSeed := func(ts time.Time) {
+		t.Helper()
+		if _, err := db.Exec(
+			`INSERT INTO requests (created_at, model_requested, provider, stream, status_code)
+			 VALUES ($1, $2, 'gemini', false, 200)`, ts, marker); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	mustSeed(atDay(now))                   // hari ini 10:00 WIB
+	mustSeed(atDay(now.AddDate(0, 0, -5))) // 5 hari lalu 10:00 WIB
+
+	handler := newRequestsListHandler(db)
+	count := func(query string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/admin/requests?"+query, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		var out struct {
+			Requests []RequestRow `json:"requests"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		return len(out.Requests)
+	}
+
+	today := now.Format("2006-01-02")
+
+	t.Run("since = hari ini → cuma baris hari ini", func(t *testing.T) {
+		if n := count("model=" + marker + "&since=" + today); n != 1 {
+			t.Errorf("since=%s → %d baris, want 1", today, n)
+		}
+	})
+
+	t.Run("until = kemarin → cuma baris lama", func(t *testing.T) {
+		yst := now.AddDate(0, 0, -1).Format("2006-01-02")
+		if n := count("model=" + marker + "&until=" + yst); n != 1 {
+			t.Errorf("until=%s → %d baris, want 1", yst, n)
+		}
+	})
+
+	t.Run("since..until ngerangkul dua-duanya", func(t *testing.T) {
+		lo := now.AddDate(0, 0, -6).Format("2006-01-02")
+		if n := count("model=" + marker + "&since=" + lo + "&until=" + today); n != 2 {
+			t.Errorf("rentang penuh → %d baris, want 2", n)
+		}
+	})
+
+	t.Run("tanggal ngawur → 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/admin/requests?since=kemarin", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("status = %d, want 400", rec.Code)
+		}
+	})
+}
+
 func TestRequestHandler(t *testing.T) {
 	db := openTestDB(t)
 	marker := "admin-detail-test"

@@ -57,6 +57,9 @@ func TestKeysCRUD(t *testing.T) {
 	if !strings.HasPrefix(created.Token, "sk-sanmon-") || created.ID == 0 {
 		t.Fatalf("respons POST janggal: %+v", created)
 	}
+	if rec.Header().Get("Access-Control-Allow-Origin") == "" {
+		t.Error("respons POST nggak set Access-Control-Allow-Origin, dashboard :8778 nggak bisa baca")
+	}
 
 	// hash di DB harus cocok sama token yang dibalikin, plaintext-nya nggak disimpan
 	var stored string
@@ -105,6 +108,9 @@ func TestKeysCRUD(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204", rec.Code)
 	}
+	if rec.Header().Get("Access-Control-Allow-Origin") == "" {
+		t.Error("respons DELETE nggak set Access-Control-Allow-Origin")
+	}
 	var disabled bool
 	if err := db.QueryRow(`SELECT disabled FROM keys WHERE id = $1`, created.ID).Scan(&disabled); err != nil {
 		t.Fatalf("baris kehapus beneran, harusnya cuma disabled: %v", err)
@@ -141,4 +147,3 @@ func TestKeyCreate_RejectsBadInput(t *testing.T) {
 		})
 	}
 }
-

@@ -113,7 +113,8 @@ const requestListCols = `id, created_at, model_requested, provider, model_resolv
 // newRequestsListHandler ngelayanin GET /admin/requests — daftar riwayat,
 // urut terbaru dulu. Pagination keyset lewat ?before_id (bukan offset: tabel
 // requests diisi terus tiap request masuk, offset bakal bikin baris
-// dobel/kelewat). Filter opsional: ?model, ?status.
+// dobel/kelewat). Filter opsional: ?model, ?status, ?since, ?until
+// (?since/?until = YYYY-MM-DD, batas hari di dashboardTZ, until inklusif).
 func newRequestsListHandler(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -151,6 +152,26 @@ func newRequestsListHandler(db *sql.DB) http.HandlerFunc {
 			}
 			args = append(args, n)
 			where += fmt.Sprintf(" AND status_code = $%d", len(args))
+		}
+		// since/until: tanggal YYYY-MM-DD, batas hari di dashboardTZ. ::timestamp
+		// dulu sebelum AT TIME ZONE biar nge-interpret bukan nge-convert (lihat
+		// stats.go). until inklusif — batas atas = tengah malam lokal besoknya.
+		// dashboardTZ di-interpolate langsung: const, bukan input user.
+		if v := q.Get("since"); v != "" {
+			if _, err := time.Parse("2006-01-02", v); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "since harus tanggal YYYY-MM-DD")
+				return
+			}
+			args = append(args, v)
+			where += fmt.Sprintf(" AND created_at >= ($%d::date)::timestamp AT TIME ZONE '%s'", len(args), dashboardTZ)
+		}
+		if v := q.Get("until"); v != "" {
+			if _, err := time.Parse("2006-01-02", v); err != nil {
+				writeJSONError(w, http.StatusBadRequest, "until harus tanggal YYYY-MM-DD")
+				return
+			}
+			args = append(args, v)
+			where += fmt.Sprintf(" AND created_at < ($%d::date + 1)::timestamp AT TIME ZONE '%s'", len(args), dashboardTZ)
 		}
 		args = append(args, limit)
 
