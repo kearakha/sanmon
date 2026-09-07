@@ -6,7 +6,13 @@ models:
   gemini-3.6-flash:
     provider: gemini
     model: gemini-3.6-flash
-    # PLACEHOLDER — angka ini harga Gemini 2.5 Flash. Koreksi kalau harga
-    # 3.6 Flash yang asli udah ketahuan.
+    # Harga promo Google AI, berlaku s/d 31 Des 2026. Mulai 1 Jan 2027
+    # naik 2x jadi in 1500000 / out 7500000.
+    price_in_per_million: 750000
+    price_out_per_million: 3750000
+  gemini-embedding-001:
+    provider: gemini
+    model: gemini-embedding-001
+    # Embeddings cuma input token; output selalu 0.
     price_in_per_million: 150000
-    price_out_per_million: 600000
+    price_out_per_million: 0

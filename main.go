@@ -65,9 +65,21 @@ func main() {
 	mux.HandleFunc("GET /admin/stream", requireAdminQueryToken(cfg.AdminToken, newStreamHandler(hub)))
 	mux.HandleFunc("GET /admin/requests", requireAdminQueryToken(cfg.AdminToken, newRequestsListHandler(db)))
 	mux.HandleFunc("GET /admin/requests/{id}", requireAdminQueryToken(cfg.AdminToken, newRequestHandler(db)))
+	mux.HandleFunc("GET /admin/stats", requireAdminQueryToken(cfg.AdminToken, newStatsHandler(db)))
 	mux.HandleFunc("GET /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeysListHandler(db)))
 	mux.HandleFunc("POST /admin/keys", requireAdminQueryToken(cfg.AdminToken, newKeyCreateHandler(db)))
 	mux.HandleFunc("DELETE /admin/keys/{id}", requireAdminQueryToken(cfg.AdminToken, newKeyDeleteHandler(db)))
+	// DELETE cross-origin selalu kena preflight. Preflight nggak boleh butuh
+	// auth — cukup balikin header CORS-nya. POST /admin/keys nggak perlu ini:
+	// dashboard kirim body tanpa Content-Type custom, jadi simple request.
+	mux.HandleFunc("OPTIONS /admin/keys/{id}", func(w http.ResponseWriter, r *http.Request) {
+		writeDashboardCORS(w)
+		w.Header().Set("Access-Control-Allow-Methods", "DELETE")
+		w.WriteHeader(http.StatusNoContent)
+	})
+	// Catch-all: dashboard SPA + asetnya. ServeMux longest-match jadi rute
+	// di atas ("/v1/", "/admin/...", "/healthz") tetap menang.
+	mux.Handle("/", newSPAHandler())
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
